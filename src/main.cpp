@@ -30,7 +30,7 @@ float A, B;                                                 // coefficient du fi
 
 float anglePositifMax = 0.0;
 float angleNegatifMax = 0.0;                     
-char kp = 2;                                                // coefficient de proportionnalité du correcteur
+char kp = 3;                                                // coefficient de proportionnalité du correcteur
 unsigned short valPWM=0, maxPWM = 1024;
 
 float R1= 22000.0;                                          // résistance de 22 kohms
