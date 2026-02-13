@@ -5,6 +5,12 @@
 #include <Wire.h>
 #include <math.h>  
 
+#define INITIALISATION 0
+#define ARRET 1
+#define AVANT 2
+#define ARRIERE 3
+
+
 // ---Declaration des Broches---
 unsigned char PWMGplus = 17;                                                // PWM (vitesse) du moteur gauche
 unsigned char PWMDplus = 16;                                                // PWM (vitesse) du moteur droit
@@ -12,6 +18,7 @@ unsigned char PWMDplus = 16;                                                // P
 unsigned char PWMGmoins = 4;                                                // PWM (vitesse) du moteur gauche
 unsigned char PWMDmoins = 19;                                               // PWM (vitesse) du moteur droit
 
+unsigned char boot = 0 ;
 char Batterie = 25;                                                         // Broche de lecture de la batterie 
 
 // ---Declaration des Objets---
@@ -25,15 +32,17 @@ char FlagCalcul = 0;
 float Ve, Vs = 0;
 float Te = 10;                                                              // période d'échantillonage en ms
 float Tau = 1000;                                                           // constante de temps du filtre en ms
-float A, B;                                                                 // coefficient du filtre
+float A, B;   
+static char etat=0;                                                              // coefficient du filtre
 
-float anglePositifMax = 4;                                                  // Angle maximum positif initialisé à 8 degrés
-float angleNegatifMax = -4;                                                 // Angle maximum négatif initialisé à -8 degrés                               
+float anglePositifMax = 0.1;                                                  // Angle maximum positif initialisé à 8 degrés
+float angleNegatifMax = -0.1;                                                 // Angle maximum négatif initialisé à -8 degrés                               
 
 float R1= 22000.0;                                                          // résistance de 22 kohms
 float R2= 10000.0;                                                          // résistance de 10 kohms
 float valeurbatterie;
 
+char valeurboot;
 // ---Variables PID---
 float erreurPrecedente, angleNormalisee;
 float angleConsigne = 0.0;
@@ -67,13 +76,12 @@ void controle(void *parameters)
     angle = (TetaWF + TetaGF) * 180 / PI;                                   // angle de l'inclinaison du gyropode en degrés    
 
     //---PID---
-    if(angle > 0 && angle > anglePositifMax) anglePositifMax = angle;       // Calcule Angle maximum positif
-    if(angle < 0 && angle < angleNegatifMax) angleNegatifMax = angle;       // Calcule Angle maximum negatif    
+    /*
     
-    if(anglePositifMax < 4) anglePositifMax = 4;                            // Limitation de l'angle maximum positif à 8 degré 
-    if(angleNegatifMax > -4) angleNegatifMax = -4;                          // Limitation de l'angle maximum negatif à -8 degré 
+    if(anglePositifMax < 0.1) anglePositifMax = 4;                            // Limitation de l'angle maximum positif à 8 degré 
+    if(angleNegatifMax > -0.1) angleNegatifMax = -4;                          // Limitation de l'angle maximum negatif à -8 degré 
                                        
-    if(angle >= 4){ // Commande Avant
+    if(angle >= 0.1){ // Commande Avant
       angleNormalisee = angle / anglePositifMax;                            // Erreur positive normalisée
       MOTplus =  kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // Calcul de la PWM à appliquer sur les moteurs
       if(MOTplus < PWMmin){                                                 // Limitation de la valeur de MOTplus à 0 
@@ -91,7 +99,7 @@ void controle(void *parameters)
       ledcWrite(canal2, 0);                                                 // Moteur gauche
       ledcWrite(canal3, 0);                                                 // Moteur droit      
     }
-    else if(angle <= -4){// Commande Arrière
+    else if(angle <= -0.1){// Commande Arrière
       angleNormalisee = angle / angleNegatifMax;//négatif/négatif = positif // Erreur negative normalisée
       MOTmoins = kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // PWM à appliquer sur les moteurs dans le sens inverse
       
@@ -117,8 +125,81 @@ void controle(void *parameters)
       ledcWrite(canal1, 0);                                                   // Moteur droit
       ledcWrite(canal2, 0);                                                   // Moteur gauche
       ledcWrite(canal3, 0);                                                   // Moteur droit                    
-    }
+    }*/
+    valeurboot = digitalRead(boot);
     
+    switch (etat)
+    {
+      case INITIALISATION: // Arrêt des moteurs
+      {
+        
+        ledcWrite(canal0, 0);                                                   // Moteur gauche
+        ledcWrite(canal1, 0);                                                   // Moteur droit
+        ledcWrite(canal2, 0);                                                   // Moteur gauche
+        ledcWrite(canal3, 0);                                                   // Moteur droit
+        if(angle > 0 && angle > anglePositifMax) anglePositifMax = angle;       // Calcule Angle maximum positif
+        if(angle < 0 && angle < angleNegatifMax) angleNegatifMax = angle; 
+        
+        if(valeurboot == HIGH) etat = ARRET ;      // Calcule Angle maximum negatif    
+        break;
+      }
+      case ARRET:
+      { 
+        ledcWrite(canal0, 0);                                                   // Moteur gauche
+        ledcWrite(canal1, 0);                                                   // Moteur droit
+        ledcWrite(canal2, 0);                                                   // Moteur gauche
+        ledcWrite(canal3, 0);                                                   // Moteur droit
+        if(angle >= 0.1) etat = AVANT;
+        if(angle <= -0.1) etat = ARRIERE;
+        break;
+      }
+      case AVANT: // Commande Avant
+      {
+        angleNormalisee = angle / anglePositifMax;                            // Erreur positive normalisée
+        MOTplus =  kp*angleNormalisee*PWMmax - kd*g.gyro.z;                   // Calcul de la PWM à appliquer sur les moteurs
+        if(MOTplus < PWMmin){                                                 // Limitation de la valeur de MOTplus à 0 
+          MOTplus = PWMmin;
+        }                                     
+        if(MOTplus > PWMmax){                                                 // Limitation de la valeur de MOTplus à 1023
+          MOTplus = PWMmax;                                 
+        }      
+
+        // Avant ON
+        ledcWrite(canal0, MOTplus);                                           // Moteur gauche
+        ledcWrite(canal1, MOTplus);                                           // Moteur droit   
+
+        // Arrière OFF
+        ledcWrite(canal2, 0);                                                 // Moteur gauche
+        ledcWrite(canal3, 0);  
+        if(angle <= -0.1) etat=ARRIERE;
+
+        break;                                                                      
+       }
+       case ARRIERE:
+       {
+        angleNormalisee = angle / angleNegatifMax;//négatif/négatif = positif // Erreur negative normalisée
+        MOTmoins = kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // PWM à appliquer sur les moteurs dans le sens inverse
+        
+        if(MOTmoins < PWMmin){                                                // Limitation de la valeur de MOTmoins à 0 
+          MOTmoins = PWMmin;
+        }                                  
+        if(MOTmoins > PWMmax){                                                  // Limitation de la valeur de MOTmoins à 1023
+          MOTmoins = PWMmax;
+        }  
+
+        // Arriere ON
+        ledcWrite(canal2, MOTmoins);                                            // Moteur gauche
+        ledcWrite(canal3, MOTmoins);                                            // Moteur droit
+        
+        // Avant OFF
+        ledcWrite(canal0, 0);                                                   // Moteur gauche
+        ledcWrite(canal1, 0);                                                   // Moteur droit   
+        if(angle >= 0.1) etat = AVANT;
+        break;
+    }
+
+
+    }
     FlagCalcul = 1;                                                         // Indicateur que les calculs sont terminés
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(Te));                     // Attente jusqu'au prochain cycle d'exécution de la tâche
   }
@@ -156,6 +237,7 @@ void setup()
   ledcAttachPin(PWMGmoins, canal2);                                         // Moteur gauche dans le sens inverse
   ledcAttachPin(PWMDmoins, canal3);                                         // Moteur droit dans le sens inverse                 
   
+  pinMode(boot,INPUT);
   // Initialisation du capteur MPU6050
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
