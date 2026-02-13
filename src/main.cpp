@@ -128,82 +128,102 @@ void controle(void *parameters)
     }*/
     valeurboot = digitalRead(boot);
     
-    switch (etat)
+   switch (etat)
     {
-      case INITIALISATION: // Arrêt des moteurs
+      case INITIALISATION: 
       {
-        
-        ledcWrite(canal0, 0);                                                   // Moteur gauche
-        ledcWrite(canal1, 0);                                                   // Moteur droit
-        ledcWrite(canal2, 0);                                                   // Moteur gauche
-        ledcWrite(canal3, 0);                                                   // Moteur droit
-        if(angle > 0 && angle > anglePositifMax) anglePositifMax = angle;       // Calcule Angle maximum positif
+        // Arrêt des moteurs pendant l'initialisation
+        ledcWrite(canal0, 0); 
+        ledcWrite(canal1, 0); 
+        ledcWrite(canal2, 0); 
+        ledcWrite(canal3, 0); 
+
+        // Calibration dynamique des angles max (si l'utilisateur penche le robot)
+        if(angle > 0 && angle > anglePositifMax) anglePositifMax = angle;       
         if(angle < 0 && angle < angleNegatifMax) angleNegatifMax = angle; 
         
-        if(valeurboot == HIGH) etat = ARRET ;      // Calcule Angle maximum negatif    
+        // Si on appuie sur le bouton, on passe en mode ARRET (prêt à partir)
+        if(valeurboot == HIGH) {
+            etat = ARRET;
+            // Petit délai anti-rebond logiciel simple pour éviter de changer d'état trop vite
+            vTaskDelay(pdMS_TO_TICKS(500)); 
+        }
         break;
       }
+
       case ARRET:
       { 
-        ledcWrite(canal0, 0);                                                   // Moteur gauche
-        ledcWrite(canal1, 0);                                                   // Moteur droit
-        ledcWrite(canal2, 0);                                                   // Moteur gauche
-        ledcWrite(canal3, 0);                                                   // Moteur droit
+        ledcWrite(canal0, 0); 
+        ledcWrite(canal1, 0); 
+        ledcWrite(canal2, 0); 
+        ledcWrite(canal3, 0); 
+        
+        // Détection du démarrage selon l'angle
         if(angle >= 0.1) etat = AVANT;
-        if(angle <= -0.1) etat = ARRIERE;
+        else if(angle <= -0.1) etat = ARRIERE;
+        
+        // Optionnel : Retour en INIT si on réappuie sur le bouton
+        if(valeurboot == HIGH) {
+             etat = INITIALISATION;
+             vTaskDelay(pdMS_TO_TICKS(500));
+        }
         break;
       }
-      case AVANT: // Commande Avant
+
+      case AVANT: 
       {
-        angleNormalisee = angle / anglePositifMax;                            // Erreur positive normalisée
-        MOTplus =  kp*angleNormalisee*PWMmax - kd*g.gyro.z;                   // Calcul de la PWM à appliquer sur les moteurs
-        if(MOTplus < PWMmin){                                                 // Limitation de la valeur de MOTplus à 0 
-          MOTplus = PWMmin;
-        }                                     
-        if(MOTplus > PWMmax){                                                 // Limitation de la valeur de MOTplus à 1023
-          MOTplus = PWMmax;                                 
-        }      
+        // Si l'angle devient négatif (avec hystérésis), on change d'état
+        if(angle <= -0.1) {
+            etat = ARRIERE;
+        } 
+        else {
+            // Calcul PID
+            angleNormalisee = angle / anglePositifMax;                            
+            MOTplus = kp*angleNormalisee*PWMmax - kd*g.gyro.z;                   
+            
+            // Saturation
+            if(MOTplus < PWMmin) MOTplus = PWMmin;
+            if(MOTplus > PWMmax) MOTplus = PWMmax;                        
 
-        // Avant ON
-        ledcWrite(canal0, MOTplus);                                           // Moteur gauche
-        ledcWrite(canal1, MOTplus);                                           // Moteur droit   
+            // Pilotage Moteurs
+            ledcWrite(canal0, MOTplus); // Moteur G Avant ON
+            ledcWrite(canal1, MOTplus); // Moteur D Avant ON
+            ledcWrite(canal2, 0);       // Moteur G Arrière OFF
+            ledcWrite(canal3, 0);       // Moteur D Arrière OFF
+        }
+        break;                                                                    
+      }
+       
+      case ARRIERE:
+      {
+        // Si l'angle devient positif (avec hystérésis), on change d'état
+        if(angle >= 0.1) {
+            etat = AVANT;
+        }
+        else {
+            // Calcul PID
+            angleNormalisee = angle / angleNegatifMax; // Négatif / Négatif = Positif
+            MOTmoins = kp*angleNormalisee*PWMmax - kd*g.gyro.z;                   
+            
+            // Saturation
+            if(MOTmoins < PWMmin) MOTmoins = PWMmin;
+            if(MOTmoins > PWMmax) MOTmoins = PWMmax;  
 
-        // Arrière OFF
-        ledcWrite(canal2, 0);                                                 // Moteur gauche
-        ledcWrite(canal3, 0);  
-        if(angle <= -0.1) etat=ARRIERE;
-
-        break;                                                                      
-       }
-       case ARRIERE:
-       {
-        angleNormalisee = angle / angleNegatifMax;//négatif/négatif = positif // Erreur negative normalisée
-        MOTmoins = kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // PWM à appliquer sur les moteurs dans le sens inverse
-        
-        if(MOTmoins < PWMmin){                                                // Limitation de la valeur de MOTmoins à 0 
-          MOTmoins = PWMmin;
-        }                                  
-        if(MOTmoins > PWMmax){                                                  // Limitation de la valeur de MOTmoins à 1023
-          MOTmoins = PWMmax;
-        }  
-
-        // Arriere ON
-        ledcWrite(canal2, MOTmoins);                                            // Moteur gauche
-        ledcWrite(canal3, MOTmoins);                                            // Moteur droit
-        
-        // Avant OFF
-        ledcWrite(canal0, 0);                                                   // Moteur gauche
-        ledcWrite(canal1, 0);                                                   // Moteur droit   
-        if(angle >= 0.1) etat = AVANT;
+            // Pilotage Moteurs
+            ledcWrite(canal0, 0);         // Moteur G Avant OFF
+            ledcWrite(canal1, 0);         // Moteur D Avant OFF  
+            ledcWrite(canal2, MOTmoins);  // Moteur G Arrière ON
+            ledcWrite(canal3, MOTmoins);  // Moteur D Arrière ON
+        }
         break;
+      }
     }
 
-
-    }
-    FlagCalcul = 1;                                                         // Indicateur que les calculs sont terminés
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(Te));                     // Attente jusqu'au prochain cycle d'exécution de la tâche
+    FlagCalcul = 1;                                                             // Indicateur que les calculs sont terminés
+    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(Te));                         // Attente jusqu'au prochain cycle
   }
 }
+
 
 /*void Vin(void *parameters)                                                // Tâche pour la lecture de la tension de la batterie
 {
