@@ -27,8 +27,8 @@ float Te = 10;                                                              // p
 float Tau = 1000;                                                           // constante de temps du filtre en ms
 float A, B;                                                                 // coefficient du filtre
 
-float anglePositifMax = 8;                                                  // Angle maximum positif initialisé à 8 degrés
-float angleNegatifMax = -8;                                                 // Angle maximum négatif initialisé à -8 degrés                               
+float anglePositifMax = 4;                                                  // Angle maximum positif initialisé à 8 degrés
+float angleNegatifMax = -4;                                                 // Angle maximum négatif initialisé à -8 degrés                               
 
 float R1= 22000.0;                                                          // résistance de 22 kohms
 float R2= 10000.0;                                                          // résistance de 10 kohms
@@ -37,7 +37,7 @@ float valeurbatterie;
 // ---Variables PID---
 float erreurPrecedente, angleNormalisee;
 float angleConsigne = 0.0;
-float kp = 1.0, kd = 0.0, ki = 0.0;
+float kp = 6.17, kd = 0.0, ki = 0.0;
 unsigned short MOTplus=0, MOTmoins = 0, PWMmax= 1023, PWMmin= 0;
 
 // ---Definition des PWM---
@@ -70,12 +70,12 @@ void controle(void *parameters)
     if(angle > 0 && angle > anglePositifMax) anglePositifMax = angle;       // Calcule Angle maximum positif
     if(angle < 0 && angle < angleNegatifMax) angleNegatifMax = angle;       // Calcule Angle maximum negatif    
     
-    if(anglePositifMax < 8) anglePositifMax = 8;                            // Limitation de l'angle maximum positif à 8 degré 
-    if(angleNegatifMax > -8) angleNegatifMax = -8;                          // Limitation de l'angle maximum negatif à -8 degré 
+    if(anglePositifMax < 4) anglePositifMax = 4;                            // Limitation de l'angle maximum positif à 8 degré 
+    if(angleNegatifMax > -4) angleNegatifMax = -4;                          // Limitation de l'angle maximum negatif à -8 degré 
                                        
     if(angle >= 4){ // Commande Avant
       angleNormalisee = angle / anglePositifMax;                            // Erreur positive normalisée
-      MOTplus =  kp*angleNormalisee*PWMmax;                                 // Calcul de la PWM à appliquer sur les moteurs
+      MOTplus =  kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // Calcul de la PWM à appliquer sur les moteurs
       if(MOTplus < PWMmin){                                                 // Limitation de la valeur de MOTplus à 0 
         MOTplus = PWMmin;
       }                                     
@@ -93,7 +93,7 @@ void controle(void *parameters)
     }
     else if(angle <= -4){// Commande Arrière
       angleNormalisee = angle / angleNegatifMax;//négatif/négatif = positif // Erreur negative normalisée
-      MOTmoins = kp*angleNormalisee*PWMmax;                                 // PWM à appliquer sur les moteurs dans le sens inverse
+      MOTmoins = kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // PWM à appliquer sur les moteurs dans le sens inverse
       
       if(MOTmoins < PWMmin){                                                // Limitation de la valeur de MOTmoins à 0 
         MOTmoins = PWMmin;
@@ -230,6 +230,10 @@ void reception(char ch)
     {
       kp = valeur.toInt();
     }
+    if (commande == "kd")
+    {
+      kd = valeur.toInt();
+    }
 
     chaine = "";
   }
@@ -243,7 +247,7 @@ void loop()
 {
   if (FlagCalcul == 1)
   {
-    Serial.printf("Angle : %.2f | erreurPositif: %.2f | MOTplus: %.d\n",angle, erreurPositive, MOTplus); // Affichage des angles sur le moniteur série
+    Serial.printf("Angle : %.2f | MOTplus: %d\n",angle, MOTplus); // Affichage des angles sur le moniteur série
     //Serial.printf("valBatterie: %.4f \n", valeurbatterie); // Affichage de la valeur de la batterie sur le moniteur série
     FlagCalcul = 0;
   }
