@@ -3,273 +3,170 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
-#include <math.h>  
-
-#define INITIALISATION 0
-#define ARRET 1
-#define AVANT 2
-#define ARRIERE 3
+#include <math.h>
+#include <ESP32Encoder.h>
 
 
-// ---Declaration des Broches---
-unsigned char PWMGplus = 17;                                                // PWM (vitesse) du moteur gauche
-unsigned char PWMDplus = 16;                                                // PWM (vitesse) du moteur droit
+// --- Déclaration des broches moteurs ---
+unsigned char PWMGplus = 17;                                              // PWM moteur gauche (sens +)
+unsigned char PWMDplus = 16;                                              // PWM moteur droit  (sens +)
 
-unsigned char PWMGmoins = 4;                                                // PWM (vitesse) du moteur gauche
-unsigned char PWMDmoins = 19;                                               // PWM (vitesse) du moteur droit
+unsigned char PWMGmoins = 4;                                              // PWM moteur gauche (sens -)
+unsigned char PWMDmoins = 19;                                             // PWM moteur droit  (sens -)
 
-unsigned char boot = 0 ;
-char Batterie = 25;                                                         // Broche de lecture de la batterie 
+char Batterie = 25;                                                       // Broche de mesure batterie
 
-// ---Declaration des Objets---
-BluetoothSerial SerialBT;                                                   // Objet Bluetooth Serial
-Adafruit_MPU6050 mpu;                                                       // Objet pour le capteur MPU6050
+// --- Objets ---
+BluetoothSerial SerialBT;                                                 // Communication Bluetooth
+Adafruit_MPU6050 mpu;                                                     // Capteur MPU6050
+ESP32Encoder encoderL;
+ESP32Encoder encoderR;
 
-// ---Declaration des Variables---
-float TetaG,TetaW,angle;
-float TetaWF,TetaGF;                     
-char FlagCalcul = 0;
+// --- Variables capteurs / filtres ---
+float TetaG, TetaW, Teta;                                                 // Angles bruts
+float TetaWF, TetaGF;                                                     // Angles filtrés
+char FlagCalcul = 0;                                                      // Indique fin du calcul
 float Ve, Vs = 0;
-float Te = 10;                                                              // période d'échantillonage en ms
-float Tau = 1000;                                                           // constante de temps du filtre en ms
-float A, B;   
-static char etat=0;                                                              // coefficient du filtre
+float Te = 10;                                                            // Période d'échantillonnage (ms)
+float Tau = 1000;                                                         // Constante du filtre (ms)
+float A, B;                                                               // Coefficients du filtre
 
-float anglePositifMax = 0.1;                                                  // Angle maximum positif initialisé à 8 degrés
-float angleNegatifMax = -0.1;                                                 // Angle maximum négatif initialisé à -8 degrés                               
-
-float R1= 22000.0;                                                          // résistance de 22 kohms
-float R2= 10000.0;                                                          // résistance de 10 kohms
+// --- Mesure batterie ---
+float R1 = 22000.0;                                                       // Résistance 22k
+float R2 = 10000.0;                                                       // Résistance 10k
 float valeurbatterie;
 
-char valeurboot;
-// ---Variables PID---
-float erreurPrecedente, angleNormalisee;
+// --- Encodeur Incremental ---
+long deltaL, deltaR;
+
+// --- PID ---
 float angleConsigne = 0.0;
-float kp = 6.17, kd = 0.0, ki = 0.0;
-unsigned short MOTplus=0, MOTmoins = 0, PWMmax= 1023, PWMmin= 0;
+float kp = 4.74, kd = 0.08, ki = 0.0;
+float Ec, CO = 0.05;                                                                 // Sortie du correcteur
+int dutyCycle1, dutyCycle2;                                               // PWM moteurs
 
-// ---Definition des PWM---
-unsigned int frequence = 20000;                                             // Fréquence de 20 kHz
-unsigned char canal0 = 0;                                                   // Canal 0 pour le moteur gauche
-unsigned char canal1 = 1;                                                   // Canal 1 pour le moteur droit
-unsigned char canal2 = 2;                                                   // Canal 2 pour le moteur gauche
-unsigned char canal3 = 3;                                                   // Canal 1 pour le moteur droit
-unsigned char resolution = 10;                                              // Résolution de 10 bits (valeurs de 0 à 1023)
 
+// --- PWM ---
+unsigned int frequence = 20000;                                           // 20 kHz
+unsigned char MOTGplus = 0;                                               // Canal PWM moteur gauche +
+unsigned char MOTDplus = 1;                                               // Canal PWM moteur droit  +
+unsigned char MOTGmoins = 2;                                              // Canal PWM moteur gauche -
+unsigned char MOTDmoins = 3;                                              // Canal PWM moteur droit  -
+unsigned char resolution = 10;                                            // Résolution 10 bits (0–1023)
+
+// --- Tâche de contrôle du gyropode ---
 void controle(void *parameters)
 {
-  TickType_t xLastWakeTime;                                                 // Variable pour stocker le temps de réveil de la tâche
-  xLastWakeTime = xTaskGetTickCount();                                      // Initialisation du temps de réveil de la tâche
+  TickType_t xLastWakeTime;                                               // Temps de réveil FreeRTOS
+  xLastWakeTime = xTaskGetTickCount();                                    // Initialisation
+
   while (1)
   {
-    //---MPU6050---
-    sensors_event_t a, g, temp;                                             // Création d'objets pour stocker les données du capteur                        
-    mpu.getEvent(&a, &g, &temp);                                            // Lecture des données du capteur
-   
-    TetaG  = -atan2(a.acceleration.y, a.acceleration.x);                    // Angle du gyroscope en radian
-    TetaGF = A * TetaG + B * TetaGF;                                        // Angle du gyroscope filtré en radian
-   
-    TetaW  =  g.gyro.z * Tau/1000;                                          // angle de l'accélération en radian  
-    TetaWF = A* TetaW + B*TetaWF;                                           // angle de l'accélération filtré en radian
+    // --- Lecture MPU6050 ---
+    sensors_event_t a, g, temp;                                           // Objets pour stocker mesures
+    mpu.getEvent(&a, &g, &temp);                                          // Lecture capteur
     
-    angle = (TetaWF + TetaGF) * 180 / PI;                                   // angle de l'inclinaison du gyropode en degrés    
+    // --- MPU6050 ---
+    // ---Calcul angle via accéléromètre ---
+    TetaG = -atan2(a.acceleration.y, a.acceleration.x);                   // Angle brut
+    TetaGF = A * TetaG + B * TetaGF;                                      // Filtre passe-bas
 
-    //---PID---
-    /*
+    // --- Calcul angle via gyroscope ---
+    TetaW = g.gyro.z * Tau / 1000;                                        // Intégration gyro
+    TetaWF = A * TetaW + B * TetaWF;                                      // Filtre passe-bas
+
+    // --- Fusion des deux angles ---
+    Teta = TetaWF + TetaGF;                                               // Angle final (radians)
+
+    // --- Correcteur PD ---
+    Ec = (Teta * kp + kd * g.gyro.z);                                       // Sortie du correcteur
+    if(Ec > 0) Ec +=CO;  
+    if(Ec < 0) Ec -=CO;
+
+    if (Ec > 0.45) Ec=0.45;
+    if (Ec < -0.45) Ec=-0.45;
+
+    // --- Conversion en PWM ---
+    dutyCycle1 = (0.5 + Ec) * 1023 ;                                      // PWM sens +
+    dutyCycle2 = (0.5 - Ec) * 1023 ;                                      // PWM sens -
+
+    // --- Saturation PWM ---
+    // if (dutyCycle1 > 1023) dutyCycle1 = 1023;
+    // if (dutyCycle2 > 1023) dutyCycle2 = 1023;
+
+    // if (dutyCycle1 < 0) dutyCycle1 = 0;
+    // if (dutyCycle2 < 0) dutyCycle2 = 0;
+
+    // --- Envoi PWM moteurs ---
+    ledcWrite(MOTGplus, dutyCycle1);                                      // Moteur gauche +
+    ledcWrite(MOTDplus, dutyCycle1);                                      // Moteur droit  +
+
+    ledcWrite(MOTGmoins, dutyCycle2);                                     // Moteur gauche -
+    ledcWrite(MOTDmoins, dutyCycle2);                                     // Moteur droit  -
     
-    if(anglePositifMax < 0.1) anglePositifMax = 4;                            // Limitation de l'angle maximum positif à 8 degré 
-    if(angleNegatifMax > -0.1) angleNegatifMax = -4;                          // Limitation de l'angle maximum negatif à -8 degré 
-                                       
-    if(angle >= 0.1){ // Commande Avant
-      angleNormalisee = angle / anglePositifMax;                            // Erreur positive normalisée
-      MOTplus =  kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // Calcul de la PWM à appliquer sur les moteurs
-      if(MOTplus < PWMmin){                                                 // Limitation de la valeur de MOTplus à 0 
-        MOTplus = PWMmin;
-      }                                     
-      if(MOTplus > PWMmax){                                                 // Limitation de la valeur de MOTplus à 1023
-        MOTplus = PWMmax;                                 
-      }      
 
-      // Avant ON
-      ledcWrite(canal0, MOTplus);                                           // Moteur gauche
-      ledcWrite(canal1, MOTplus);                                           // Moteur droit   
-
-      // Arrière OFF
-      ledcWrite(canal2, 0);                                                 // Moteur gauche
-      ledcWrite(canal3, 0);                                                 // Moteur droit      
-    }
-    else if(angle <= -0.1){// Commande Arrière
-      angleNormalisee = angle / angleNegatifMax;//négatif/négatif = positif // Erreur negative normalisée
-      MOTmoins = kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // PWM à appliquer sur les moteurs dans le sens inverse
-      
-      if(MOTmoins < PWMmin){                                                // Limitation de la valeur de MOTmoins à 0 
-        MOTmoins = PWMmin;
-      }                                  
-      if(MOTmoins > PWMmax){                                                  // Limitation de la valeur de MOTmoins à 1023
-        MOTmoins = PWMmax;
-      }  
-
-      // Arriere ON
-      ledcWrite(canal2, MOTmoins);                                            // Moteur gauche
-      ledcWrite(canal3, MOTmoins);                                            // Moteur droit
-      
-      // Avant OFF
-      ledcWrite(canal0, 0);                                                   // Moteur gauche
-      ledcWrite(canal1, 0);                                                   // Moteur droit                
-    }
-
-    else{
-      // Arrêt des moteurs
-      ledcWrite(canal0, 0);                                                   // Moteur gauche
-      ledcWrite(canal1, 0);                                                   // Moteur droit
-      ledcWrite(canal2, 0);                                                   // Moteur gauche
-      ledcWrite(canal3, 0);                                                   // Moteur droit                    
-    }*/
-    valeurboot = digitalRead(boot);
-    
-    switch (etat)
-    {
-      case INITIALISATION: // Arrêt des moteurs
-      {
-        
-        ledcWrite(canal0, 0);                                                   // Moteur gauche
-        ledcWrite(canal1, 0);                                                   // Moteur droit
-        ledcWrite(canal2, 0);                                                   // Moteur gauche
-        ledcWrite(canal3, 0);                                                   // Moteur droit
-        if(angle > 0 && angle > anglePositifMax) anglePositifMax = angle;       // Calcule Angle maximum positif
-        if(angle < 0 && angle < angleNegatifMax) angleNegatifMax = angle; 
-        
-        if(valeurboot == HIGH) etat = ARRET ;      // Calcule Angle maximum negatif    
-        break;
-      }
-      case ARRET:
-      { 
-        ledcWrite(canal0, 0);                                                   // Moteur gauche
-        ledcWrite(canal1, 0);                                                   // Moteur droit
-        ledcWrite(canal2, 0);                                                   // Moteur gauche
-        ledcWrite(canal3, 0);                                                   // Moteur droit
-        if(angle >= 0.1) etat = AVANT;
-        if(angle <= -0.1) etat = ARRIERE;
-        break;
-      }
-      case AVANT: // Commande Avant
-      {
-        angleNormalisee = angle / anglePositifMax;                            // Erreur positive normalisée
-        MOTplus =  kp*angleNormalisee*PWMmax - kd*g.gyro.z;                   // Calcul de la PWM à appliquer sur les moteurs
-        if(MOTplus < PWMmin){                                                 // Limitation de la valeur de MOTplus à 0 
-          MOTplus = PWMmin;
-        }                                     
-        if(MOTplus > PWMmax){                                                 // Limitation de la valeur de MOTplus à 1023
-          MOTplus = PWMmax;                                 
-        }      
-
-        // Avant ON
-        ledcWrite(canal0, MOTplus);                                           // Moteur gauche
-        ledcWrite(canal1, MOTplus);                                           // Moteur droit   
-
-        // Arrière OFF
-        ledcWrite(canal2, 0);                                                 // Moteur gauche
-        ledcWrite(canal3, 0);  
-        if(angle <= -0.1) etat=ARRIERE;
-
-        break;                                                                      
-       }
-       case ARRIERE:
-       {
-        angleNormalisee = angle / angleNegatifMax;//négatif/négatif = positif // Erreur negative normalisée
-        MOTmoins = kp*angleNormalisee*PWMmax - kd*g.gyro.z;                     // PWM à appliquer sur les moteurs dans le sens inverse
-        
-        if(MOTmoins < PWMmin){                                                // Limitation de la valeur de MOTmoins à 0 
-          MOTmoins = PWMmin;
-        }                                  
-        if(MOTmoins > PWMmax){                                                  // Limitation de la valeur de MOTmoins à 1023
-          MOTmoins = PWMmax;
-        }  
-
-        // Arriere ON
-        ledcWrite(canal2, MOTmoins);                                            // Moteur gauche
-        ledcWrite(canal3, MOTmoins);                                            // Moteur droit
-        
-        // Avant OFF
-        ledcWrite(canal0, 0);                                                   // Moteur gauche
-        ledcWrite(canal1, 0);                                                   // Moteur droit   
-        if(angle >= 0.1) etat = AVANT;
-        break;
-    }
-
-
-    }
-    FlagCalcul = 1;                                                         // Indicateur que les calculs sont terminés
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(Te));                     // Attente jusqu'au prochain cycle d'exécution de la tâche
+    // --- Fin du cycle ---
+    FlagCalcul = 1;                                                       // Indique que les calculs sont faits
+    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(Te));                   // Attente période
   }
 }
 
-/*void Vin(void *parameters)                                                // Tâche pour la lecture de la tension de la batterie
+/*
+// --- Lecture tension batterie (désactivée) ---
+void Vin(void *parameters)
 {
   Ve = 1;
   while (1)
   {
-    valeurbatterie=(((3.3/4095.0)*analogRead(Batterie)*(R1+R2))/R2)+0.3;    // Calcul de la valeur de la batterie en volts
-
+    valeurbatterie = (((3.3/4095.0)*analogRead(Batterie)*(R1+R2))/R2) + 0.3;
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 */
+
 void setup()
 {
   Serial.begin(115200);
-  //Serial.printf("Bonjour \n\r");
-  
-  //SerialBT.begin("ESP32test");                                              // Bluetooth device name
-  //SerialBT.println("Hello from ESP32!");                                    // Message de bienvenue pour le Bluetooth
 
-  // Configuration de la PWM
-  ledcSetup(canal0, frequence, resolution);               
-  ledcSetup(canal1, frequence, resolution);         
- 
-  ledcSetup(canal2, frequence, resolution);               
-  ledcSetup(canal3, frequence, resolution);      
-  
-  // Liaison des canaux PWM aux broches
-  ledcAttachPin(PWMGplus, canal0);                                          // Moteur gauche dans le sens positif                     
-  ledcAttachPin(PWMDplus, canal1);                                          // Moteur droit dans le sens positif
-  ledcAttachPin(PWMGmoins, canal2);                                         // Moteur gauche dans le sens inverse
-  ledcAttachPin(PWMDmoins, canal3);                                         // Moteur droit dans le sens inverse                 
-  
-  pinMode(boot,INPUT);
-  // Initialisation du capteur MPU6050
-  if (!mpu.begin()) {
+  // --- Configuration PWM ---
+  ledcSetup(MOTGplus, frequence, resolution);
+  ledcSetup(MOTDplus, frequence, resolution);
+
+  ledcSetup(MOTGmoins, frequence, resolution);
+  ledcSetup(MOTDmoins, frequence, resolution);
+
+  // --- Assignation des broches ---
+  ledcAttachPin(PWMGplus, MOTGplus);
+  ledcAttachPin(PWMDplus, MOTDplus);
+  ledcAttachPin(PWMGmoins, MOTGmoins);
+  ledcAttachPin(PWMDmoins, MOTDmoins);
+
+  // --- Initialisation MPU6050 ---
+  if (!mpu.begin())
+  {
     Serial.println("Failed to find MPU6050 chip");
-    while (1) {
+    while (1)
+    {
       delay(10);
     }
   }
   Serial.println("MPU6050 Found!");
 
+  // --- Création tâche contrôle ---
   xTaskCreate(
-      controle,   // nom de la fonction
-      "controle", // nom de la tache que nous venons de vréer
-      10000,      // taille de la pile en octet
-      NULL,       // parametre
-      10,         // tres haut niveau de priorite
-      NULL        // descripteur
-  );
-  /*xTaskCreate(
-      Vin,        // nom de la fonction
-      "Vin",      // nom de la tache que nous venons de vréer
-      10000,      // taille de la pile en octet
-      NULL,      // parametre
-      1,          // bas niveau de priorite
-      NULL        // descripteur
-  );*/
+      controle,
+      "controle",
+      10000,
+      NULL,
+      10,
+      NULL);
 
-  // calcul coeff filtre
-  Serial.begin(115200);
+  // --- Calcul coefficients filtre ---
   A = 1 / (1 + Tau / Te);
   B = Tau / Te * A;
 }
 
+// --- Réception commandes série ---
 void reception(char ch)
 {
   static int i = 0;
@@ -282,6 +179,8 @@ void reception(char ch)
   {
     index = chaine.indexOf(' ');
     length = chaine.length();
+
+
     if (index == -1)
     {
       commande = chaine;
@@ -293,13 +192,14 @@ void reception(char ch)
       valeur = chaine.substring(index + 1, length);
     }
 
+    // --- Commandes dynamiques ---
     if (commande == "Tau")
     {
       Tau = valeur.toFloat();
-      // calcul coeff filtre
       A = 1 / (1 + Tau / Te);
       B = Tau / Te * A;
     }
+
 
     if (commande == "Te")
     {
@@ -307,15 +207,10 @@ void reception(char ch)
       A = 1 / (1 + Tau / Te);
       B = Tau / Te * A;
     }
-    
-    if (commande == "kp")
-    {
-      kp = valeur.toInt();
-    }
-    if (commande == "kd")
-    {
-      kd = valeur.toInt();
-    }
+
+    if (commande == "kp") kp = valeur.toFloat();
+    if (commande == "kd") kd = valeur.toFloat();
+    if (commande == "CO") CO = valeur.toFloat();
 
     chaine = "";
   }
@@ -325,20 +220,21 @@ void reception(char ch)
   }
 }
 
+
+// --- Boucle principale ---
 void loop()
 {
   if (FlagCalcul == 1)
   {
-    Serial.printf("Angle : %.2f | MOTplus: %d\n",angle, MOTplus); // Affichage des angles sur le moniteur série
-    //Serial.printf("valBatterie: %.4f \n", valeurbatterie); // Affichage de la valeur de la batterie sur le moniteur série
+    Serial.printf("%lf  %lf %lf\n", Ec,Teta,CO); // Affichage debug
     FlagCalcul = 0;
   }
-  
 }
 
+// --- Lecture série ---
 void serialEvent()
 {
-  while (Serial.available() > 0) // tant qu'il y a des caractères à lire
+  while (Serial.available() > 0)
   {
     reception(Serial.read());
   }
